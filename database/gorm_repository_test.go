@@ -207,3 +207,68 @@ func TestGormRepository_Delete_Negative(t *testing.T) {
 	assert.Equal(t, fakeError, err)
 	repo.DB.Mock.AssertExpectations(t)
 }
+
+func TestGormDBWrapper_Transaction_Positive(t *testing.T) {
+	resetMock()
+	wrapper := &GormDBWrapper{DB: repo.DB.DB, Mock: new(mock.Mock)}
+
+	// Mock Begin and Commit
+	mockedTxWrapper := &GormDBWrapper{DB: repo.DB.DB, Mock: wrapper.Mock}
+	wrapper.Mock.On("Begin").Return(mockedTxWrapper).Once()
+	mockedTxWrapper.Mock.On("Commit").Return(mockedTxWrapper).Once()
+
+	transactionalOps := func(tx GormDBInterface) error {
+		// Mock Create method within the transaction
+		tx.(*GormDBWrapper).Mock.On("Create", mock.AnythingOfType("*database.TestModel")).Return(tx).Once()
+
+		// Use the transaction to create a new TestModel
+		tx.Create(&TestModel{Name: "Test Transaction"})
+
+		return nil
+	}
+
+	// Execute the Transaction method
+	wrapper.Transaction(transactionalOps)
+
+	// Assert expectations met
+	wrapper.Mock.AssertExpectations(t)
+	mockedTxWrapper.Mock.AssertExpectations(t)
+}
+
+func TestGormDBWrapper_Transaction_Negative(t *testing.T) {
+	resetMock()
+	wrapper := &GormDBWrapper{DB: repo.DB.DB, Mock: new(mock.Mock)}
+
+	// Simulate the start of a transaction
+	mockedTxWrapper := &GormDBWrapper{DB: repo.DB.DB, Mock: wrapper.Mock}
+	wrapper.Mock.On("Begin").Return(mockedTxWrapper).Once()
+
+	// Simulate an error occurring within the transaction for Create method
+	expectedError := errors.New("transaction error")
+	mockedTxWrapper.Mock.On("Create", mock.AnythingOfType("*database.TestModel")).Run(func(args mock.Arguments) {
+		mockedTxWrapper.DB.Error = expectedError // Set the error directly on DB.Error
+	}).Return(mockedTxWrapper).Once()
+
+	// Mock Rollback since it should be called on error
+	mockedTxWrapper.Mock.On("Rollback").Return(mockedTxWrapper).Once()
+
+	// Mock Commit to do nothing - it should not affect the test outcome
+	mockedTxWrapper.Mock.On("Commit").Return(mockedTxWrapper).Maybe()
+
+	transactionalOps := func(tx GormDBInterface) error {
+		// This operation is expected to fail
+		err := tx.Create(&TestModel{Name: "Test Transaction"}).GetDB().Error
+		return err
+	}
+
+	// Execute the Transaction method
+	err := wrapper.Transaction(transactionalOps)
+
+	// Assert that the error is as expected
+	assert.Error(t, err, "Expected transaction to fail")
+	assert.Equal(t, expectedError, err, "Error should match the expected transaction error")
+
+	// Assert expectations met for both wrapper and transaction wrapper
+	wrapper.Mock.AssertExpectations(t)
+	mockedTxWrapper.Mock.AssertExpectations(t)
+}

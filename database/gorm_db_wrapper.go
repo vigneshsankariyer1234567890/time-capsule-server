@@ -15,6 +15,10 @@ type GormDBInterface interface {
 	Delete(value interface{}, conds ...interface{}) GormDBInterface
 	WithContext(ctx context.Context) GormDBInterface
 	GetDB() *gorm.DB
+	Transaction(fc func(tx GormDBInterface) error) error
+	Begin() GormDBInterface
+	Commit() GormDBInterface
+	Rollback() GormDBInterface
 }
 
 type GormDBWrapper struct {
@@ -84,4 +88,52 @@ func (w *GormDBWrapper) WithContext(ctx context.Context) GormDBInterface {
 
 func (w *GormDBWrapper) GetDB() *gorm.DB {
 	return w.DB
+}
+
+func (w *GormDBWrapper) Begin() GormDBInterface {
+	if w.Mock != nil {
+		w.Mock.Called()
+		return w
+	}
+	w.DB = w.DB.Begin()
+	return w
+}
+
+func (w *GormDBWrapper) Rollback() GormDBInterface {
+	if w.Mock != nil {
+		w.Mock.Called()
+		return w
+	}
+	w.DB = w.DB.Rollback()
+	return w
+}
+
+func (w *GormDBWrapper) Commit() GormDBInterface {
+	if w.Mock != nil {
+		w.Mock.Called()
+		return w
+	}
+	w.DB = w.DB.Commit()
+	return w
+}
+
+func (w *GormDBWrapper) Transaction(fc func(tx GormDBInterface) error) error {
+	var txWrapper GormDBInterface
+
+	txWrapper = w.Begin()
+	if txWrapper.GetDB().Error != nil {
+		return txWrapper.GetDB().Error
+	}
+
+	// Execute the function with the transaction wrapper
+	err := fc(txWrapper)
+	if err != nil {
+		// If there is an error, rollback the transaction
+		txWrapper.Rollback()
+		return err
+	}
+
+	// Commit the transaction if all is well
+	txWrapper.Commit()
+	return nil
 }
